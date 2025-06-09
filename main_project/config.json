@@ -1,0 +1,55 @@
+{
+  "k8_details": {
+    "ssh_conn_id": "k8_ssh_conn_id",
+    "local_script_path_parser": "local/path/to/run_parser_job.py",
+    "remote_script_path_parser": "/tmp/lsf_pipeline_run/run_parser_job.py",
+    "local_script_path_count": "local/path/to/run_count_job.py",
+    "remote_script_path_count": "/tmp/lsf_pipeline_run/run_count_job.py",
+    "remote_working_dir": "/tmp/lsf_pipeline_run",
+    "tmp_local_config_path": "tmp/local/config/path/config.json",
+    "remote_config_path": "/tmp/lsf_pipeline_run/config.json"
+  },
+  "aws_details": {
+    "s3_bucket": "my-data-bucket",
+    "s3_prefix_base": "raw/lsf_data/{index_name}/{yyyy-mm-dd}/{hh-mm}",
+    "s3_region": "ap-south-1"
+  },
+  "snowflake_details": {
+    "sf_account": "my_account",
+    "sf_warehouse": "my_wh",
+    "sf_database": "my_db",
+    "sf_schema": "my_schema",
+    "sf_raw_table": "raw_table_name",
+    "sf_audit_table": "audit_table_name",
+    "sf_col_pattern": "filename_prefix_for_today",
+    "task_name": "my_snowpipe_task",
+    "sf_audit_database": "my_db",
+    "sf_audit_schema": "my_schema"
+  },
+  "pipeline_settings": {
+    "pipeline_name": "lsf_pipeline",
+    "index_name": "lsf_index",
+    "elt_date": "2025-06-04",
+    "timezone": "UTC",
+    "farm_list": [
+      "farm1",
+      "farm2"
+    ],
+    "template_path": "/data/{fm}/lsb.users",
+    "valid_block_fields": [
+      "GROUP_NAME",
+      "GROUP_MEMBER",
+      "USER_SHARES"
+    ],
+    "disallowed_block_fields": [
+      "PRIORITY",
+      "GROUP_ADMIN"
+    ],
+    "avg_base_record_count": 1000,
+    "base_sf_ingest_wait_secs": 60,
+    "ingest_pause_slope": 1.2,
+    "max_retry_attempts": 3,
+    "retry_pause_base_secs": 30,
+    "retry_pause_slope": 1
+  }
+}
