@@ -1,113 +1,61 @@
-# File: k8_scripts/run_parser_job.py
-
-import os
-import re
-import json
-import argparse
 from pathlib import Path
-import boto3
+import json
+from airflow.providers.ssh.hooks.ssh import SSHHook
 
-def parse_lsf_file(file_path, farm_name, timezone_str):
-    from pendulum import now
-    records = []
 
-    with open(file_path, "r") as f:
-        lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+def send_and_run_count_in_k8(config_dict):
+    """
+    Sends the count script and config to the remote K8 pod via SSH,
+    executes it, and then optionally deletes the remote config.
 
-    in_group = False
-    process_next_line = False
+    Args:
+        config_dict (dict): Dictionary with keys:
+            - ssh_conn_id
+            - local_script_path
+            - remote_script_path
+            - tmp_local_config_path
+            - remote_config_path
 
-    for line in lines:
-        if "Begin UserGroup" in line:
-            in_group = True
-            process_next_line = False
-            continue
-        if "End UserGroup" in line:
-            in_group = False
-            continue
-        if in_group and "GROUP_NAME" in line and "GROUP_MEMBER" in line and "USER_SHARES" in line and "#USER_SHARES" not in line:
-            process_next_line = True
-            continue
-        if process_next_line and not line.startswith("#"):
-            line_clean = line.split("#")[0].strip()
-            values = re.split(r"\s+", line_clean)
-            if len(values) < 3:
-                continue
-
-            group_name = values[0]
-            member_str = values[1]
-            share_str = values[2]
-
-            members = re.findall(r"\w+", member_str)
-            shares = re.findall(r"\[([^\]]+)\]", share_str)
-
-            share_dict = {}
-            for s in shares:
-                try:
-                    user, val = s.split(",")
-                    share_dict[user.strip()] = int(val.strip())
-                except Exception:
-                    continue
-
-            for user in members:
-                fairshare = share_dict.get(user)
-                if fairshare is not None:
-                    records.append({
-                        "farm": farm_name,
-                        "group": group_name,
-                        "user_name": user,
-                        "fairshare": fairshare,
-                        "timestamp": now(timezone_str).to_iso8601_string()
-                    })
-
-    return records
-
-def write_ndjson(records, output_path):
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w") as f:
-        for rec in records:
-            f.write(json.dumps(rec) + "\n")
-
-def upload_to_s3(local_path, s3_path, aws_key, aws_secret):
-    bucket = s3_path.split("/")[2]
-    key = "/".join(s3_path.split("/")[3:])
-    s3 = boto3.client(
-        "s3",
-        aws_access_key_id=aws_key,
-        aws_secret_access_key=aws_secret
-    )
-    s3.upload_file(local_path, bucket, key)
-
-def cleanup(file_path):
+    Returns:
+        str: Status message
+    """
     try:
-        os.remove(file_path)
-    except Exception:
-        pass
+        ssh_conn_id = config_dict["ssh_conn_id"]
+        local_script_path = config_dict["local_script_path"]
+        remote_script_path = config_dict["remote_script_path"]
+        tmp_local_config_path = config_dict["tmp_local_config_path"]
+        remote_config_path = config_dict["remote_config_path"]
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    args = parser.parse_args()
+        ssh_hook = SSHHook(ssh_conn_id=ssh_conn_id)
 
-    with open(args.config, "r") as f:
-        config = json.load(f)
+        # ✅ Step 1: Save the config locally as a temporary JSON file
+        local_tmp = Path(tmp_local_config_path)
+        with open(local_tmp, "w") as f:
+            json.dump(config_dict, f, indent=2)
 
-    timezone = config.get("timezone", "UTC")
-    all_records = []
+        # ✅ Step 2: SSH and SFTP to pod
+        with ssh_hook.get_conn() as ssh_client:
+            sftp = ssh_client.open_sftp()
+            try:
+                # Upload config file
+                sftp.put(str(local_tmp), remote_config_path)
+                print(f"[INFO] Config file uploaded to: {remote_config_path}")
+            finally:
+                sftp.close()
 
-    for farm in config["farm_list"]:
-        src_path = config["template_path"].replace("{fm}", farm)
-        if os.path.exists(src_path):
-            all_records += parse_lsf_file(src_path, farm, timezone)
+            # ✅ Step 3: Execute the remote script
+            stdin, stdout, stderr = ssh_client.exec_command(f"python3 {remote_script_path} --config {remote_config_path}")
+            stdout_output = stdout.read().decode().strip()
+            stderr_output = stderr.read().decode().strip()
+            print(f"[INFO] STDOUT:\n{stdout_output}")
+            if stderr_output:
+                print(f"[WARN] STDERR:\n{stderr_output}")
 
-    output_path = config["final_ndjson_output_path"]
-    write_ndjson(all_records, output_path)
+            # ✅ Step 4: Clean up remote config
+            ssh_client.exec_command(f"rm -f {remote_config_path}")
+            print(f"[INFO] Removed remote config: {remote_config_path}")
 
-    upload_to_s3(
-        output_path,
-        config["aws_s3_final_output_path"],
-        config["aws_access_key_id"],
-        config["aws_secret_access_key"]
-    )
+        return "✅ Count job submitted and executed in K8 pod."
 
-    cleanup(output_path)
+    except Exception as e:
+        return f"❌ Failed to submit count job to K8 pod: {e}"
