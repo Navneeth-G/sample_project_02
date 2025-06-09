@@ -8,8 +8,8 @@ def send_and_run_count_in_k8(config_dict):
     executes it, and then deletes the script and config remotely.
     """
     ssh_conn_id = config_dict["ssh_conn_id"]
-    local_script_path = config_dict["local_script_path"]
-    remote_script_path = config_dict["remote_script_path"]
+    local_script_path = config_dict["count_local_script_path"]
+    remote_script_path = config_dict["count_remote_script_path"]   
     tmp_local_config_path = config_dict["tmp_local_config_path"]
     remote_config_path = config_dict["remote_config_path"]
 
