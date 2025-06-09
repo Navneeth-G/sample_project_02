@@ -4,9 +4,25 @@ import json
 import pendulum
 import snowflake.connector
 
+
 def parse_lsb_users_file_legacy(file_path, farm, timezone="UTC"):
-    with open(file_path, 'r') as f:
-        lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+    """
+    Parses a legacy-formatted LSF usergroup block and extracts fairshare data.
+
+    Args:
+        file_path (str): Full path to the lsb.users file
+        farm (str): Name of the farm/environment
+        timezone (str): Timezone for timestamp field
+
+    Returns:
+        List[Dict]: Parsed records from the UserGroup block
+    """
+    try:
+        with open(file_path, 'r') as f:
+            lines = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+    except Exception as e:
+        print(f"[WARN] Could not open or read file for farm '{farm}': {e}")
+        return []
 
     in_group = False
     process_next_line = False
@@ -21,7 +37,6 @@ def parse_lsb_users_file_legacy(file_path, farm, timezone="UTC"):
             in_group = False
             continue
         if in_group and "GROUP_NAME" in line and "GROUP_MEMBER" in line and "USER_SHARES" in line and "#USER_SHARES" not in line:
-            header = re.split(r"\s+", line.strip().split("#")[0])
             process_next_line = True
             continue
         if process_next_line and not line.startswith("#"):
@@ -58,6 +73,15 @@ def parse_lsb_users_file_legacy(file_path, farm, timezone="UTC"):
 
 
 def update_snowflake_count(info_dict, total_count):
+    """
+    Updates the ES_count field in the audit table in Snowflake.
+
+    Args:
+        info_dict (dict): Config dictionary with Snowflake credentials
+        total_count (int): Total number of parsed usergroup records
+    """
+    table_fqn = f'{info_dict["sf_database"]}.{info_dict["sf_schema"]}.{info_dict["sf_audit_table"]}'
+
     conn = snowflake.connector.connect(
         user=info_dict["sf_username"],
         password=info_dict["sf_password"],
@@ -69,7 +93,7 @@ def update_snowflake_count(info_dict, total_count):
     cursor = conn.cursor()
 
     update_sql = f"""
-        UPDATE {info_dict["sf_audit_table"]}
+        UPDATE {table_fqn}
         SET ES_count = %(total_count)s
         WHERE index_name = %(index_name)s
           AND elt_date = %(elt_date)s
@@ -82,22 +106,29 @@ def update_snowflake_count(info_dict, total_count):
             "elt_date": info_dict["elt_date"]
         })
         conn.commit()
+        print(f"[INFO] Snowflake audit table updated with ES_count = {total_count}")
+    except Exception as e:
+        print(f"[ERROR] Failed to update Snowflake: {e}")
     finally:
         cursor.close()
         conn.close()
 
 
 def count_and_update_snowflake(info_dict):
+    """
+    Main function that parses all farm files, counts records, and updates Snowflake.
+    """
     total_records = 0
     for farm in info_dict["farm_list"]:
         file_path = info_dict["template_path"].replace("{fm}", farm)
         if not os.path.exists(file_path):
+            print(f"[WARN] File not found for farm '{farm}': {file_path}")
             continue
         records = parse_lsb_users_file_legacy(file_path, farm, timezone=info_dict.get("timezone", "UTC"))
+        print(f"[INFO] Parsed {len(records)} records for farm '{farm}'")
         total_records += len(records)
 
     update_snowflake_count(info_dict, total_records)
-    print(f"[INFO] Updated Snowflake with total record count: {total_records}")
 
 
 if __name__ == "__main__":
