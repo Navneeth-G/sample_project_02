@@ -8,8 +8,8 @@ def send_and_run_parser_in_k8(config_dict):
     executes it, and performs cleanup afterward.
     """
     ssh_conn_id = config_dict["ssh_conn_id"]
-    local_script_path = config_dict["local_script_path"]
-    remote_script_path = config_dict["remote_script_path"]
+    local_script_path = config_dict["parser_local_script_path"]
+    remote_script_path = config_dict["parser_remote_script_path"]
     tmp_local_config_path = config_dict["tmp_local_config_path"]
     remote_config_path = config_dict["remote_config_path"]
     remote_work_dir = config_dict["remote_working_dir"]
