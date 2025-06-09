@@ -1,21 +1,25 @@
 import math
 
-def compute_scaled_pause(record_count: int, base_wait_secs: int, scaling_threshold: int, slope: float) -> int:
+def compute_scaled_pause(actual_count: int, base_count: int, base_time_sec: int, slope: float) -> int:
     """
-    Computes a scaled pause duration based on record count and configuration.
+    Computes a dynamically scaled wait/pause time based on actual record count vs. base reference.
 
-    Parameters:
-        record_count (int): Actual number of records.
-        base_wait_secs (int): Base wait time in seconds for up to the threshold.
-        scaling_threshold (int): Record count threshold after which pause is scaled.
-        slope (float): Slope factor to control pause growth beyond threshold.
+    Args:
+        actual_count (int): Actual number of records encountered.
+        base_count (int): Reference average record count the base_time_sec is designed for.
+        base_time_sec (int): Base pause time in seconds for base_count records.
+        slope (float): Skewness multiplier to control pause scaling beyond base_count.
 
     Returns:
-        int: Final computed wait time in seconds (rounded up).
+        int: Final scaled wait time in seconds (rounded up).
     """
-    if record_count <= scaling_threshold:
-        return base_wait_secs
+    if base_count <= 0:
+        raise ValueError("base_count must be greater than 0")
 
-    excess_ratio = (record_count - scaling_threshold) / scaling_threshold
-    scaled_wait = base_wait_secs + slope * base_wait_secs * excess_ratio
-    return math.ceil(scaled_wait)
+    if actual_count <= base_count:
+        return base_time_sec
+
+    excess_ratio = (actual_count - base_count) / base_count
+    scaled_pause = base_time_sec + (slope * base_time_sec * excess_ratio)
+
+    return math.ceil(scaled_pause)
