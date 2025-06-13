@@ -1,7 +1,6 @@
 import os
 import re
 from typing import List
-import pendulum
 from k8_scripts.block_identify import extract_first_usergroup_block  # Update this import path if needed
 
 def estimate_total_json_records(farm_list, file_path_template):
@@ -65,7 +64,7 @@ def estimate_total_json_records(farm_list, file_path_template):
 
 
     total_records = 0
-    ts = pendulum.now(timezone).to_iso8601_string()
+    # ts = pendulum.now(timezone).to_iso8601_string()
 
     for farm in farm_list:
         file_path = file_path_template.replace("{farm}", farm)
