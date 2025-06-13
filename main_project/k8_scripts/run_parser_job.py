@@ -126,10 +126,9 @@ def parse_multiple_farms_and_upload_to_s3(
         aws_secret_key="SECRET..."
     )
     """
-
     ts = pendulum.now(timezone)
     ts_formatted = ts.format("YYYY-MM-DDTHH-mm-ss")
-    output_file_name = f"{index_name}_{ts_formatted}.ndjson"
+    output_file_name = f"{index_name}_{ts_formatted}.json"
     output_path = os.path.join(temp_output_dir, output_file_name)
 
     all_records = []
@@ -170,31 +169,39 @@ def parse_multiple_farms_and_upload_to_s3(
                 in_group = False
                 process_next_line = False
                 print(f"[DEBUG][{farm}] Found 'End UserGroup'")
-                continue
+                break  # << STOP AFTER FIRST BLOCK
 
             if in_group and "GROUP_NAME" in line and "GROUP_MEMBER" in line and "USER_SHARES" in line:
                 process_next_line = True
-                print(f"[DEBUG][{farm}] Header detected")
+                print(f"[DEBUG][{farm}] Header line detected.")
                 continue
 
             if process_next_line:
                 print(f"[DEBUG][{farm}] Raw line: {line}")
-                parts = re.split(r"\s+", line.split("#")[0].strip(), maxsplit=2)
+                parts = re.split(r"\s+", line.split("#")[0].strip())
                 if len(parts) < 3:
-                    print(f"[WARN][{farm}] Skipping malformed line: {line}")
+                    print(f"[WARN][{farm}] Skipping line (too few columns): {line}")
                     continue
 
-                group_name, members_raw, shares_raw = parts
+                group_name = parts[0]
+                members_raw = parts[1]
+                shares_raw = parts[2]
+
+                print(f"[DEBUG][{farm}] Group: {group_name} | Members raw: {members_raw} | Shares raw: {shares_raw}")
+
                 members = re.findall(r'\w+', members_raw)
                 shares = re.findall(r'\[([^\]]+)\]', shares_raw)
-
                 share_dict = {}
+
                 for s in shares:
                     try:
                         user, val = s.split(",")
                         share_dict[user.strip()] = int(val.strip())
                     except Exception as e:
                         print(f"[WARN][{farm}] Malformed share '{s}': {e}")
+                        continue
+
+                print(f"[DEBUG][{farm}] Parsed share map: {share_dict}")
 
                 for user in members:
                     fairshare = share_dict.get(user)
@@ -206,31 +213,30 @@ def parse_multiple_farms_and_upload_to_s3(
                             "fairshare": fairshare,
                             "timestamp": ts.to_iso8601_string()
                         }
+                        print(f"[DEBUG][{farm}] Parsed record: {record}")
                         all_records.append(record)
                         record_count_for_farm += 1
-                        print(f"[DEBUG][{farm}] Record: {json.dumps(record)}")
                     else:
-                        print(f"[WARN][{farm}] No fairshare for user '{user}'")
+                        print(f"[WARN][{farm}] No fairshare for user: {user}")
 
-        print(f"[INFO][{farm}] Total records parsed: {record_count_for_farm}")
+        print(f"[INFO][{farm}] Parsed {record_count_for_farm} records.")
 
     if not all_records:
-        print("[INFO] No records found. Skipping upload.")
-        return None
+        print("[INFO] No valid records found. Nothing to upload.")
+        return
 
     try:
         with open(output_path, "w") as f:
             for record in all_records:
                 f.write(json.dumps(record) + "\n")
-        print(f"[INFO] NDJSON file written to: {output_path}")
+        print(f"[INFO] NDJSON file created: {output_path}")
     except Exception as e:
-        print(f"[ERROR] Failed to write NDJSON: {e}")
-        return None
+        print(f"[ERROR] Failed to write file: {e}")
+        return
 
     s3_date = ts.format("YYYY-MM-DD")
     s3_time = ts.format("HH-mm")
-    s3_filename = f"{index_name}_{ts_formatted}.ndjson"
-    s3_key = f"{s3_key_prefix}/{s3_date}/{s3_time}/{s3_filename}"
+    s3_key = f"{s3_key_prefix}/{s3_date}/{s3_time}/{output_file_name}"
 
     try:
         s3 = boto3.client(
@@ -241,9 +247,9 @@ def parse_multiple_farms_and_upload_to_s3(
         s3.upload_file(output_path, s3_bucket, s3_key)
         print(f"[INFO] Uploaded to s3://{s3_bucket}/{s3_key}")
     except Exception as e:
-        print(f"[ERROR] S3 upload failed: {e}")
-        return None
+        print(f"[ERROR] Upload to S3 failed: {e}")
+        return
 
-    print("[DONE] Upload completed.")
+    print("[DONE] All farm data processed and uploaded.")
     return output_path, f"s3://{s3_bucket}/{s3_key}"
 
