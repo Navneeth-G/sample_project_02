@@ -126,99 +126,36 @@ def parse_multiple_farms_and_upload_to_s3(
         aws_secret_key="SECRET..."
     )
     """
-    ts = pendulum.now(timezone)
-    ts_formatted = ts.format("YYYY-MM-DDTHH-mm-ss")
-    output_file_name = f"{index_name}_{ts_formatted}.json"
-    output_path = os.path.join(temp_output_dir, output_file_name)
 
+    ts_obj = pendulum.now(timezone)
+    timestamp_str = ts_obj.to_iso8601_string()
     all_records = []
 
     for farm in farm_list:
         file_path = file_path_template.replace("{farm}", farm)
-
         if not os.path.isfile(file_path):
-            print(f"[INFO][{farm}] File not found: {file_path}. Skipping.")
+            print(f"[WARN] File not found for {farm}: {file_path}")
             continue
 
-        print(f"[INFO][{farm}] Reading file: {file_path}")
-        try:
-            with open(file_path, "r") as f:
-                lines = [line.strip() for line in f if line.strip()]
-        except Exception as e:
-            print(f"[ERROR][{farm}] Cannot read file: {e}")
-            continue
+        with open(file_path, "r") as f:
+            raw_lines = [line.strip() for line in f if line.strip()]
 
-        in_group = False
-        process_next_line = False
-
-        for i, line in enumerate(lines):
-            if line.startswith("#"):
-                continue
-
-            if "Begin UserGroup" in line:
-                in_group = True
-                print(f"[DEBUG][{farm}] Start of UserGroup block.")
-                continue
-
-            if in_group and "GROUP_NAME" in line and "GROUP_MEMBER" in line and "USER_SHARES" in line:
-                process_next_line = True
-                print(f"[DEBUG][{farm}] Found header.")
-                continue
-
-            if "End UserGroup" in line:
-                print(f"[DEBUG][{farm}] End of UserGroup block.")
-                break  # Stop after first block
-
-            if process_next_line:
-                parts = re.split(r"\s+", line.split("#")[0].strip())
-                if len(parts) < 3:
-                    print(f"[WARN][{farm}] Skipping malformed line: {line}")
-                    continue
-
-                group_name = parts[0]
-                members = re.findall(r"\w+", parts[1])
-                shares = re.findall(r"\[([^\]]+)\]", parts[2])
-
-                share_dict = {}
-                for s in shares:
-                    try:
-                        user, val = s.split(",")
-                        share_dict[user.strip()] = int(val.strip())
-                    except Exception as e:
-                        print(f"[WARN][{farm}] Skipping bad share entry '{s}': {e}")
-                        continue
-
-                for user in members:
-                    if user in share_dict:
-                        record = {
-                            "farm": farm,
-                            "group": group_name,
-                            "user_name": user,
-                            "fairshare": share_dict[user],
-                            "timestamp": ts.to_iso8601_string()
-                        }
-                        all_records.append(record)
+        block_lines = extract_first_usergroup_block_lines(raw_lines)
+        parsed = parse_usergroup_block_lines(block_lines, farm, timestamp_str)
+        print(f"[INFO][{farm}] Parsed {len(parsed)} records")
+        all_records.extend(parsed)
 
     if not all_records:
-        print("[INFO] No data parsed. Skipping file write and upload.")
+        print("[INFO] No records found. Skipping JSON and upload.")
         return
 
-    with open(output_path, "w") as f:
-        for r in all_records:
-            f.write(json.dumps(r) + "\n")
-
-    s3_date = ts.format("YYYY-MM-DD")
-    s3_time = ts.format("HH-mm")
-    s3_filename = f"{index_name}_{ts_formatted}.json"
-    s3_key = f"{s3_key_prefix}/{s3_date}/{s3_time}/{s3_filename}"
-
-    try:
-        s3 = boto3.client("s3", aws_access_key_id=aws_access_key, aws_secret_access_key=aws_secret_key)
-        s3.upload_file(output_path, s3_bucket, s3_key)
-        print(f"[INFO] Uploaded to s3://{s3_bucket}/{s3_key}")
-    except Exception as e:
-        print(f"[ERROR] Upload failed: {e}")
+    output_path = write_records_to_json(all_records, index_name, output_dir, ts_obj)
+    if not output_path:
         return
 
-    print(f"[DONE] All data processed and uploaded.")
-    return output_path, f"s3://{s3_bucket}/{s3_key}"
+    s3_uri = upload_json_to_s3(output_path, s3_bucket, s3_key_prefix,
+                               index_name, ts_obj, aws_access_key, aws_secret_key)
+    if s3_uri:
+        clean_temp_json_file(output_path)
+
+    return s3_uri
