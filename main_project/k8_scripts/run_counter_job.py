@@ -58,7 +58,6 @@ def estimate_total_json_records(farm_list: List[str], file_path_template: str) -
 
     ----------------------------------------------------------------------------------------
     """
-
     total_users = 0
 
     for farm in farm_list:
@@ -72,37 +71,32 @@ def estimate_total_json_records(farm_list: List[str], file_path_template: str) -
             with open(path, "r") as f:
                 lines = [line.strip() for line in f if line.strip()]
         except Exception as e:
-            print(f"[ERROR][{farm}] Failed to read file: {e}")
+            print(f"[ERROR][{farm}] Cannot read file: {e}")
             continue
 
         in_group = False
-        process_next = False
-        group_finished = False
+        process_next_line = False
 
         for line in lines:
-            if group_finished:
-                break  # stop after first block
-
             if line.startswith("#"):
                 continue
+
             if "Begin UserGroup" in line:
                 in_group = True
-                process_next = False
-                continue
-            if "End UserGroup" in line:
-                in_group = False
-                process_next = False
-                group_finished = True  # stop further parsing
-                continue
-            if in_group and "GROUP_NAME" in line and "GROUP_MEMBER" in line and "USER_SHARES" in line:
-                process_next = True
                 continue
 
-            if process_next and not line.startswith("#"):
+            if in_group and "GROUP_NAME" in line and "GROUP_MEMBER" in line and "USER_SHARES" in line:
+                process_next_line = True
+                continue
+
+            if "End UserGroup" in line:
+                break  # Only process first group
+
+            if process_next_line:
                 match = re.search(r"\(([^)]+)\)", line)
                 if match:
                     users = match.group(1).split()
                     total_users += len(users)
 
-    print(f"[ESTIMATE] JSON records that will be generated: {total_users}")
+    print(f"[ESTIMATE] Total user records: {total_users}")
     return total_users
