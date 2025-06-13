@@ -1,163 +1,246 @@
 import os
 import re
 import json
-import pendulum
 import boto3
-import logging
+import pendulum
 
-# Enable full debug logging
-logging.basicConfig(level=logging.DEBUG)
+def parse_multiple_farms_and_upload_to_s3(
+    farm_list,
+    file_path_template,
+    s3_bucket,
+    s3_key_prefix,
+    index_name,
+    aws_access_key,
+    aws_secret_key,
+    timezone="America/Los_Angeles",
+    temp_output_dir="/tmp"
+):
+    """
+    parse_multiple_farms_and_upload_to_s3
 
+    Parses LSF-style user group configuration files from multiple farms, extracts fairshare user records, and writes the data
+    to a single NDJSON file which is uploaded to AWS S3.
 
-def parse_lsf_users_file_legacy(file_path, farm, timezone="UTC", fixed_timestamp=None,
-                                 valid_fields=None, disallowed_fields=None):
-    try:
-        with open(file_path, 'r') as f:
-            lines = [line.strip() for line in f if line.strip()]
-    except Exception as e:
-        print(f"[WARN] Cannot read file for farm '{farm}': {e}")
-        return []
+    ----------------------------------------------------------------------------------------
 
-    in_group = False
-    process_next_line = False
-    records = []
+    Inputs
+    ------
+    - farm_list (List[str]):
+        A list of farm/environment names to process. Each farm is expected to have an `lsb.users` file located at a standard path.
 
-    for line in lines:
-        print(f"[DEBUG] Raw line: {line}")  # Line preview
+    - file_path_template (str):
+        A file path pattern that includes `{farm}` as a placeholder for each farm name.
+        Example: "/global/lsf/cells/{farm}/conf/lsbatch/{farm}/configdir/lsb.users"
 
-        if line.startswith("#"):
+    - s3_bucket (str):
+        The name of the AWS S3 bucket where the NDJSON file should be uploaded.
+
+    - s3_key_prefix (str):
+        The path prefix in the S3 bucket under which the NDJSON file will be stored.
+        Example: "fairshare/all_farms"
+        The full S3 key will be generated dynamically using the current date and time.
+
+    - index_name (str):
+        A logical name that is included in the output filename, e.g., "lsf_user_share".
+
+    - aws_access_key (str):
+        AWS access key ID for uploading to S3.
+
+    - aws_secret_key (str):
+        AWS secret access key for uploading to S3.
+
+    - timezone (str, optional, default "UTC"):
+        The timezone to use for timestamps in the records and S3 key structure.
+
+    - temp_output_dir (str, optional, default "/tmp"):
+        Local directory path to write the temporary NDJSON file before uploading to S3.
+
+    ----------------------------------------------------------------------------------------
+
+    Expected Source File Format (lsb.users)
+    ---------------------------------------
+    Begin UserGroup
+    GROUP_NAME      GROUP_MEMBER                  USER_SHARES
+    prod_users      (alice bob carol)             [alice, 10][bob, 20][carol, 30]
+    dev_users       (dave eve)                    [default, 5]
+    End UserGroup
+
+    Each line after the header defines a group, a list of users, and either default or explicit fairshare values.
+
+    ----------------------------------------------------------------------------------------
+
+    Output (S3 File)
+    ---------------
+    - A single NDJSON file will be created and uploaded.
+    - File name example:
+        lsf_user_share_2025-06-12T18-45-00.ndjson
+
+    - S3 key path structure:
+        s3://<bucket>/<s3_key_prefix>/<YYYY-MM-DD>/<HH-mm>/<index_name>_<timestamp>.ndjson
+
+    - Each line in the NDJSON file looks like:
+        {"farm": "us01_swe", "group": "prod_users", "user_name": "alice", "fairshare": 10, "timestamp": "2025-06-12T18:45:00+00:00"}
+
+    ----------------------------------------------------------------------------------------
+
+    Logging & Debugging
+    -------------------
+    - The function prints:
+        - The source file being processed for each farm
+        - Every raw line from the file
+        - Group name, members, share mappings
+        - Final parsed records per user
+    - Skips farms that don't have the `lsb.users` file (no error, just a message)
+
+    ----------------------------------------------------------------------------------------
+
+    Returns
+    -------
+    - Tuple: (local_file_path, s3_uri) on success
+    - Or None if no records were found or file writing/upload failed
+
+    ----------------------------------------------------------------------------------------
+
+    Example Call
+    ------------
+    parse_multiple_farms_and_upload_to_s3(
+        farm_list=["us01_swe", "tcad", "pythia"],
+        file_path_template="/global/lsf/cells/{farm}/conf/lsbatch/{farm}/configdir/lsb.users",
+        s3_bucket="my-audit-bucket",
+        s3_key_prefix="fairshare/all_farms",
+        index_name="lsf_user_share",
+        aws_access_key="AKIA...",
+        aws_secret_key="SECRET..."
+    )
+    """
+
+    ts = pendulum.now(timezone)
+    ts_formatted = ts.format("YYYY-MM-DDTHH-mm-ss")
+    output_file_name = f"{index_name}_{ts_formatted}.ndjson"
+    output_path = os.path.join(temp_output_dir, output_file_name)
+
+    all_records = []
+
+    for farm in farm_list:
+        file_path = file_path_template.replace("{farm}", farm)
+
+        if not os.path.isfile(file_path):
+            print(f"[INFO][{farm}] File not found: {file_path}. Skipping.")
             continue
-        if "Begin UserGroup" in line:
-            in_group = True
-            process_next_line = False
+
+        print(f"[INFO][{farm}] Processing farm.")
+        print(f"[INFO][{farm}] Using source file: {file_path}")
+
+        try:
+            with open(file_path, "r") as f:
+                lines = [line.strip() for line in f if line.strip()]
+        except Exception as e:
+            print(f"[WARN][{farm}] Could not read file: {e}")
             continue
-        if "End UserGroup" in line:
-            in_group = False
-            continue
-        if in_group and valid_fields and all(field in line for field in valid_fields):
-            print(f"[DEBUG] Valid block line detected: {line}")
-            print(f"[DEBUG] Valid fields required: {valid_fields}")
-            if disallowed_fields and any(bad in line for bad in disallowed_fields):
-                print(f"[DEBUG] Line rejected due to disallowed fields: {line}")
-                process_next_line = False
-                continue
-            process_next_line = True
-            continue
-        if process_next_line:
+
+        in_group = False
+        process_next_line = False
+        record_count_for_farm = 0
+
+        for i, line in enumerate(lines):
+            print(f"[DEBUG][{farm}] Line {i}: {line}")
+
             if line.startswith("#"):
                 continue
-            values = re.split(r"\s+", line.split("#")[0].strip())
-            if len(values) < 3:
-                print(f"[DEBUG] Skipping short line: {line}")
+
+            if "Begin UserGroup" in line:
+                in_group = True
+                print(f"[DEBUG][{farm}] Found 'Begin UserGroup'")
                 continue
 
-            group_name = values[0]
-            member_str = values[1]
-            share_str = values[2]
+            if "End UserGroup" in line:
+                in_group = False
+                process_next_line = False
+                print(f"[DEBUG][{farm}] Found 'End UserGroup'")
+                continue
 
-            members = re.findall(r'\w+', member_str)
-            shares = re.findall(r'\[([^\]]+)\]', share_str)
-            share_dict = {}
-            for s in shares:
-                try:
-                    user, val = s.split(",")
-                    share_dict[user.strip()] = int(val.strip())
-                except:
+            if in_group and "GROUP_NAME" in line and "GROUP_MEMBER" in line and "USER_SHARES" in line and "#USER_SHARES" not in line:
+                process_next_line = True
+                print(f"[DEBUG][{farm}] Header line detected. Expecting data lines next.")
+                continue
+
+            if process_next_line:
+                print(f"[DEBUG][{farm}] Raw line: {line}")
+                parts = re.split(r"\s+", line.split("#")[0].strip())
+                if len(parts) < 3:
+                    print(f"[WARN][{farm}] Skipping line (too few columns): {line}")
                     continue
 
-            for user in members:
-                fairshare = share_dict.get(user, None)
-                if fairshare is not None:
-                    records.append({
-                        "farm": farm,
-                        "group": group_name,
-                        "user_name": user,
-                        "fairshare": fairshare,
-                        "timestamp": fixed_timestamp
-                    })
-    print(f"[DEBUG] Parsed {len(records)} records for farm: {farm}")
-    return records
+                group_name = parts[0]
+                members_raw = parts[1]
+                shares_raw = parts[2]
 
+                print(f"[DEBUG][{farm}] Group Name: {group_name}")
+                print(f"[DEBUG][{farm}] Members raw: {members_raw}")
+                print(f"[DEBUG][{farm}] Shares raw: {shares_raw}")
 
-def write_ndjson(records, output_path):
-    with open(output_path, 'w') as f:
-        for rec in records:
-            f.write(json.dumps(rec) + "\n")
-    print(f"[DEBUG] Wrote NDJSON to: {output_path}")
-    print(f"[DEBUG] File size: {os.path.getsize(output_path)} bytes")
+                members = re.findall(r'\w+', members_raw)
+                print(f"[DEBUG][{farm}] Extracted members: {members}")
 
-    # Optional preview of output
-    with open(output_path, 'r') as f:
-        print("[DEBUG] First 2 lines of NDJSON:")
-        for i in range(2):
-            print(f.readline().strip())
+                shares = re.findall(r'\[([^\]]+)\]', shares_raw)
+                share_dict = {}
+                for s in shares:
+                    try:
+                        user, val = s.split(",")
+                        share_dict[user.strip()] = int(val.strip())
+                    except Exception as e:
+                        print(f"[WARN][{farm}] Skipping malformed share: '{s}' | Error: {e}")
+                        continue
 
+                print(f"[DEBUG][{farm}] Parsed shares: {share_dict}")
 
-def upload_to_s3(local_path, bucket, s3_key, aws_access_key, aws_secret_key):
-    print(f"[DEBUG] Preparing to upload: {local_path}")
+                for user in members:
+                    fairshare = share_dict.get(user, None)
+                    if fairshare is not None:
+                        record = {
+                            "farm": farm,
+                            "group": group_name,
+                            "user_name": user,
+                            "fairshare": fairshare,
+                            "timestamp": ts.to_iso8601_string()
+                        }
+                        print(f"[DEBUG][{farm}] Final record: {json.dumps(record)}")
+                        all_records.append(record)
+                        record_count_for_farm += 1
+                    else:
+                        print(f"[WARN][{farm}] No fairshare found for user '{user}' in group '{group_name}'")
+
+        print(f"[INFO][{farm}] Parsed {record_count_for_farm} records.")
+
+    if not all_records:
+        print("[INFO] No records found across all farms. Nothing to upload.")
+        return
+
+    try:
+        with open(output_path, "w") as f:
+            for record in all_records:
+                f.write(json.dumps(record) + "\n")
+        print(f"[INFO] Wrote {len(all_records)} total records to: {output_path}")
+    except Exception as e:
+        print(f"[ERROR] Failed to write NDJSON file: {e}")
+        return
+
+    s3_date = ts.format("YYYY-MM-DD")
+    s3_time = ts.format("HH-mm")
+    s3_filename = f"{index_name}_{ts_formatted}.ndjson"
+    s3_key = f"{s3_key_prefix}/{s3_date}/{s3_time}/{s3_filename}"
+
     try:
         s3 = boto3.client(
             "s3",
             aws_access_key_id=aws_access_key,
             aws_secret_access_key=aws_secret_key
         )
-        s3.upload_file(local_path, bucket, s3_key)
-        print(f"[INFO] Uploaded to s3://{bucket}/{s3_key}")
+        s3.upload_file(output_path, s3_bucket, s3_key)
+        print(f"[INFO] Uploaded to s3://{s3_bucket}/{s3_key}")
     except Exception as e:
-        print(f"[ERROR] Failed to upload to S3: {e}")
-
-
-def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    args = parser.parse_args()
-
-    with open(args.config) as f:
-        config = json.load(f)
-
-    print(f"[DEBUG] Template path: {config['template_path']}")
-    print(f"[DEBUG] Output path: {config['final_ndjson_output_path']}")
-    print(f"[DEBUG] S3 bucket/key: {config['s3_bucket']} / {config['s3_key']}")
-
-    all_records = []
-    timestamp = pendulum.now(config.get("timezone", "UTC")).to_iso8601_string()
-
-    for farm in config["farm_list"]:
-        file_path = config["template_path"].replace("{fm}", farm)
-        print(f"[DEBUG] Looking for file: {file_path}")
-        if not os.path.exists(file_path):
-            print(f"[WARN] File not found: {file_path}")
-            continue
-        records = parse_lsf_users_file_legacy(
-            file_path=file_path,
-            farm=farm,
-            timezone=config.get("timezone", "UTC"),
-            fixed_timestamp=timestamp,
-            valid_fields=config.get("valid_block_fields", []),
-            disallowed_fields=config.get("disallowed_fields", [])
-        )
-        all_records.extend(records)
-
-    print(f"[DEBUG] Total records parsed: {len(all_records)}")
-    if not all_records:
-        print("[ERROR] No records were parsed. Nothing to upload.")
+        print(f"[ERROR] Upload to S3 failed: {e}")
         return
 
-    output_path = config["final_ndjson_output_path"]
-    write_ndjson(all_records, output_path)
-
-    upload_to_s3(
-        local_path=output_path,
-        bucket=config["s3_bucket"],
-        s3_key=config["s3_key"],
-        aws_access_key=config["aws_access_key"],
-        aws_secret_key=config["aws_secret_key"]
-    )
-
-    os.remove(output_path)
-    print(f"[INFO] Temporary file deleted: {output_path}")
-
-
-if __name__ == "__main__":
-    main()
+    print("[DONE] All farm data processed and uploaded successfully.")
+    return output_path, f"s3://{s3_bucket}/{s3_key}"
