@@ -57,13 +57,35 @@ def parse_multiple_farms_and_upload_to_s3(
 
     ----------------------------------------------------------------------------------------
 
-    Expected Input File Format (lsb.users)
+    ----------------------------------------------------------------------------------------
+
+    Expected Source File Format (lsb.users)
     ---------------------------------------
     Begin UserGroup
     GROUP_NAME      GROUP_MEMBER                  USER_SHARES
     prod_users      (alice bob carol)             [alice, 10][bob, 20][carol, 30]
     dev_users       (dave eve)                    [default, 5]
     End UserGroup
+
+    Each group line contains:
+    - A group name
+    - A list of users in parentheses
+    - A list of share assignments in square brackets
+
+    ----------------------------------------------------------------------------------------
+
+    Parsing Logic
+    -------------
+    - For each non-comment line within a valid UserGroup section:
+        1. Only the first three fields are parsed: group name, member list, and share list.
+        2. Any content beyond the third field (e.g., inline comments or extra malformed fields) is ignored.
+        3. Member list is extracted from parentheses: (alice bob)
+        4. Share mappings are extracted from square brackets: [alice, 10]
+
+    This ensures robustness even if comments or garbage data follow valid lines.
+
+    ----------------------------------------------------------------------------------------
+
 
     ----------------------------------------------------------------------------------------
 
