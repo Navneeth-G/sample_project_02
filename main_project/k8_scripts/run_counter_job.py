@@ -4,22 +4,59 @@ from typing import List
 
 def estimate_total_json_records(farm_list: List[str], file_path_template: str) -> int:
     """
+    estimate_total_json_records
+
     Estimates the total number of user-level JSON records that would be generated
-    by parsing all LSF user group configuration files from multiple farms.
+    from parsing the LSF user group files for a given list of farms.
 
-    Parameters
-    ----------
-    farm_list : List[str]
-        List of farm/environment names.
+    ----------------------------------------------------------------------------------------
 
-    file_path_template : str
-        Path template where '{farm}' will be replaced with the actual farm name.
+    Purpose
+    -------
+    This function is used for a **dry run** before parsing and uploading. It helps estimate
+    how many user-level records would be created — one per user — across all farm files.
+
+    ----------------------------------------------------------------------------------------
+
+    Inputs
+    ------
+    - farm_list : List[str]
+        A list of farm/environment names to evaluate.
+
+    - file_path_template : str
+        A string template where `{farm}` will be replaced by each farm name.
         Example: "/global/lsf/cells/{farm}/conf/lsbatch/{farm}/configdir/lsb.users"
 
-    Returns
-    -------
-    int
-        Total number of user-level records (each user = 1 record).
+    ----------------------------------------------------------------------------------------
+
+    Expected Input File Format (for each farm)
+    ------------------------------------------
+    Begin UserGroup
+    GROUP_NAME      GROUP_MEMBER                  USER_SHARES
+    prod_users      (alice bob carol)             [alice, 10][bob, 20][carol, 30]
+    dev_users       (dave eve)                    [default, 5]
+    End UserGroup
+
+    The users inside the parentheses (GROUP_MEMBER) are extracted and counted.
+
+    ----------------------------------------------------------------------------------------
+
+    Output
+    ------
+    - Console debug/INFO logs for each farm
+    - Final total number of estimated JSON records printed
+    - Returns an `int`: the sum total of all users that would become JSON records
+
+    ----------------------------------------------------------------------------------------
+
+    Example Call
+    ------------
+    farm_list = ["us01_swe", "tcad", "pythia"]
+    file_path_template = "/global/lsf/cells/{farm}/conf/lsbatch/{farm}/configdir/lsb.users"
+
+    estimate_total_json_records(farm_list, file_path_template)
+
+    ----------------------------------------------------------------------------------------
     """
 
     total_users = 0
