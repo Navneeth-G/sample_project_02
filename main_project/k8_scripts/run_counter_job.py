@@ -1,8 +1,10 @@
 import os
 import re
 from typing import List
+import pendulum
+from k8_scripts.block_identify import extract_first_usergroup_block  # Update this import path if needed
 
-def estimate_total_json_records(farm_list: List[str], file_path_template: str) -> int:
+def estimate_total_json_records(farm_list, file_path_template):
     """
     estimate_total_json_records
 
@@ -58,45 +60,47 @@ def estimate_total_json_records(farm_list: List[str], file_path_template: str) -
 
     ----------------------------------------------------------------------------------------
     """
-    total_users = 0
+
+
+
+
+    total_records = 0
+    ts = pendulum.now(timezone).to_iso8601_string()
 
     for farm in farm_list:
-        path = file_path_template.replace("{farm}", farm)
+        file_path = file_path_template.replace("{farm}", farm)
+        print(f"\n[INFO][{farm}] Checking file: {file_path}")
 
-        if not os.path.isfile(path):
-            print(f"[INFO][{farm}] File not found: {path}. Skipping.")
+        lines = extract_first_usergroup_block(file_path)
+        if not lines:
+            print(f"[INFO][{farm}] Skipping — no valid UserGroup block found.")
             continue
 
-        try:
-            with open(path, "r") as f:
-                lines = [line.strip() for line in f if line.strip()]
-        except Exception as e:
-            print(f"[ERROR][{farm}] Cannot read file: {e}")
-            continue
-
-        in_group = False
-        process_next_line = False
+        record_count = 0
+        header_found = False
 
         for line in lines:
-            if line.startswith("#"):
+            line = line.strip()
+            if not line or line.startswith("#"):
                 continue
 
-            if "Begin UserGroup" in line:
-                in_group = True
+            if "GROUP_NAME" in line and "GROUP_MEMBER" in line and "USER_SHARES" in line:
+                header_found = True
                 continue
 
-            if in_group and "GROUP_NAME" in line and "GROUP_MEMBER" in line and "USER_SHARES" in line:
-                process_next_line = True
+            if not header_found:
                 continue
 
-            if "End UserGroup" in line:
-                break  # Only process first group
+            parts = re.split(r"\s+", line.split("#")[0].strip())
+            if len(parts) < 3:
+                continue
 
-            if process_next_line:
-                match = re.search(r"\(([^)]+)\)", line)
-                if match:
-                    users = match.group(1).split()
-                    total_users += len(users)
+            member_raw = parts[1]
+            members = re.findall(r"\w+", member_raw)
+            record_count += len(members)
 
-    print(f"[ESTIMATE] Total user records: {total_users}")
-    return total_users
+        print(f"[INFO][{farm}] Estimated JSON records: {record_count}")
+        total_records += record_count
+
+    print(f"\n[SUMMARY] Total estimated JSON records across all farms: {total_records}")
+    return total_records
