@@ -6,7 +6,7 @@ import boto3
 from typing import List, Tuple, Optional
 from k8_scipts.block_identify import extract_first_usergroup_block_lines
 from k8_scripts.parsing_func import parse_usergroup_block_lines
-
+from k8_scripts.creating_temp_json_file import write_records_to_json
 
 def parse_multiple_farms_and_upload_to_s3(
     farm_list: List[str],
