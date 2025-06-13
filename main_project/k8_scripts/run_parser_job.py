@@ -160,7 +160,7 @@ def parse_multiple_farms_and_upload_to_s3(
 
     s3_uri = upload_json_to_s3(output_path, s3_bucket, s3_key_prefix,
                                index_name, ts_obj, aws_access_key, aws_secret_key)
-    if s3_uri:
-        clean_temp_json_file(output_path)
+    # if s3_uri:
+    #     clean_temp_json_file(output_path)
 
-    return s3_uri
+    return output_path, s3_uri
