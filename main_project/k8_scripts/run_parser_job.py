@@ -244,3 +244,53 @@ def parse_multiple_farms_and_upload_to_s3(
 
     print("[DONE] All farm data processed and uploaded successfully.")
     return output_path, f"s3://{s3_bucket}/{s3_key}"
+
+
+import os
+
+def cleanup_temp_ndjson_files(temp_dir="/tmp", prefix="", dry_run=False):
+    """
+    Deletes .ndjson files from a temp directory, optionally filtered by prefix.
+
+    Parameters
+    ----------
+    temp_dir : str
+        The directory to clean up. Default is "/tmp".
+
+    prefix : str
+        Only files starting with this prefix will be deleted (e.g., "lsf_user_share_").
+        Leave empty to delete all .ndjson files.
+
+    dry_run : bool
+        If True, files are listed but not deleted.
+
+    Returns
+    -------
+    List[str]
+        List of file paths that were deleted (or would be deleted in dry_run).
+    """
+    deleted = []
+
+    if not os.path.isdir(temp_dir):
+        print(f"[ERROR] Not a valid directory: {temp_dir}")
+        return deleted
+
+    for file in os.listdir(temp_dir):
+        full_path = os.path.join(temp_dir, file)
+
+        if os.path.isfile(full_path) and file.endswith(".ndjson"):
+            if prefix and not file.startswith(prefix):
+                continue
+            if dry_run:
+                print(f"[DRY RUN] Would delete: {full_path}")
+            else:
+                try:
+                    os.remove(full_path)
+                    print(f"[DELETED] {full_path}")
+                    deleted.append(full_path)
+                except Exception as e:
+                    print(f"[ERROR] Failed to delete {full_path}: {e}")
+
+    if not deleted and not dry_run:
+        print("[INFO] No matching files were deleted.")
+    return deleted
