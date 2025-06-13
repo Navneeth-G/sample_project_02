@@ -68,8 +68,6 @@ def estimate_total_json_records(farm_list: List[str], file_path_template: str) -
             print(f"[INFO][{farm}] File not found: {path}. Skipping.")
             continue
 
-        print(f"[INFO][{farm}] Reading file: {path}")
-
         try:
             with open(path, "r") as f:
                 lines = [line.strip() for line in f if line.strip()]
@@ -79,33 +77,32 @@ def estimate_total_json_records(farm_list: List[str], file_path_template: str) -
 
         in_group = False
         process_next = False
-        user_count_this_farm = 0
+        group_finished = False
 
-        for i, line in enumerate(lines):
-            print(f"[DEBUG][{farm}] Line {i}: {line}")
+        for line in lines:
+            if group_finished:
+                break  # stop after first block
 
             if line.startswith("#"):
                 continue
             if "Begin UserGroup" in line:
                 in_group = True
+                process_next = False
                 continue
             if "End UserGroup" in line:
                 in_group = False
                 process_next = False
+                group_finished = True  # stop further parsing
                 continue
             if in_group and "GROUP_NAME" in line and "GROUP_MEMBER" in line and "USER_SHARES" in line:
                 process_next = True
                 continue
-            if process_next:
+
+            if process_next and not line.startswith("#"):
                 match = re.search(r"\(([^)]+)\)", line)
                 if match:
                     users = match.group(1).split()
-                    user_count_this_farm += len(users)
-                else:
-                    print(f"[WARN][{farm}] Could not extract users from line: {line}")
+                    total_users += len(users)
 
-        total_users += user_count_this_farm
-        print(f"[INFO][{farm}] Estimated users: {user_count_this_farm}")
-
-    print(f"[ESTIMATE] Total JSON records that would be generated: {total_users}")
+    print(f"[ESTIMATE] JSON records that will be generated: {total_users}")
     return total_users
